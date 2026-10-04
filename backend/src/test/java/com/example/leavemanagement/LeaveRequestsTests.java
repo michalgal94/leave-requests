@@ -30,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 // Runs against a real, throwaway PostgreSQL started by Testcontainers.
@@ -378,6 +379,59 @@ class LeaveRequestsTests {
             assertEquals(1, results.stream().filter(code -> code == 400).count());
         }
         assertEquals(before + 1, leaveRequests.count());
+    }
+
+    @Test
+    void security_RejectsUnexpectedFieldsAndMalformedValuesWithoutSaving() throws Exception {
+        Employee employee = employeeWithQuota(20);
+        long before = leaveRequests.count();
+        String valid = createPayload(employee.getId(), "2026-08-01", "2026-08-02");
+        for (String body : List.of(
+                valid.replace("}", ",\"status\":1,\"days\":-100}"),
+                valid.replace("\"type\":1", "\"type\":999"),
+                valid.replace("\"employeeId\":" + employee.getId(), "\"employeeId\":1.5"),
+                valid.replace("2026-08-01", "not-a-date"), "{invalid-json")) {
+            mockMvc.perform(post("/api/leave-requests").contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().string("Invalid request body. Check the field values and date format."));
+        }
+        assertEquals(before, leaveRequests.count());
+    }
+
+    @Test
+    void security_CorsAllowsOnlyLocalFrontendAndSupportedMethods() throws Exception {
+        mockMvc.perform(options("/api/leave-requests")
+                        .header("Origin", "http://localhost:4200")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "Content-Type"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:4200"));
+        mockMvc.perform(options("/api/leave-requests")
+                        .header("Origin", "https://untrusted.example")
+                        .header("Access-Control-Request-Method", "POST"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(options("/api/leave-requests")
+                        .header("Origin", "http://localhost:4200")
+                        .header("Access-Control-Request-Method", "DELETE"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void security_EmployeeDataIsNotCachedAndResponsesHaveSecurityHeaders() throws Exception {
+        mockMvc.perform(get("/api/employees"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().string("X-Frame-Options", "DENY"))
+                .andExpect(header().string("Referrer-Policy", "no-referrer"));
+    }
+
+    @Test
+    void security_RejectsEmptyOrOversizedSearchInput() throws Exception {
+        for (String name : List.of("", "   ", "x".repeat(101))) {
+            mockMvc.perform(get("/api/leave-requests/search").param("name", name))
+                    .andExpect(status().isBadRequest());
+        }
     }
 
     private String createPayload(Long employeeId, String startDate, String endDate) {

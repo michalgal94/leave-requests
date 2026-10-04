@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: leave
       POSTGRES_PASSWORD: leave
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,11 +18,12 @@ services:
   api:
     build: ./backend
     environment:
+      SERVER_ADDRESS: 0.0.0.0
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/leave
       SPRING_DATASOURCE_USERNAME: leave
       SPRING_DATASOURCE_PASSWORD: leave
     ports:
-      - "5080:5080"
+      - "127.0.0.1:5080:5080"
     depends_on:
       db:
         condition: service_healthy

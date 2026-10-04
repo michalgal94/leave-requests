@@ -2,13 +2,14 @@ import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testin
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { LeaveRequestsComponent } from './leave-requests.component';
+import { Employee, LeaveRequest, LeaveStatus } from '../models/leave-request.model';
 
 describe('Leave requests', () => {
   let fixture: ComponentFixture<LeaveRequestsComponent>;
   let component: LeaveRequestsComponent;
   let http: HttpTestingController;
   const api = 'http://localhost:5080/api/leave-requests';
-  const employee = { id: 1, name: 'Dana', annualQuota: 20 };
+  const employee: Employee = { id: 1, name: 'Dana', annualQuota: 20 };
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
@@ -81,8 +82,8 @@ describe('Leave requests', () => {
     expect(component.submitting).toBeTrue();
     request.flush({ id: 10, ...request.request.body, days: 3, status: 0 });
     expect(component.submitting).toBeFalse();
-    expect(component.requests[0].employee).toEqual(employee);
-    expect(component.submitSuccess).toContain('successfully');
+    expect(component.requests()[0].employee).toEqual(employee);
+    expect(component.submitSuccess).toContain('awaiting approval');
     expect(component.requestForm.controls.type.value).toBeNull();
   });
 
@@ -90,13 +91,14 @@ describe('Leave requests', () => {
     fillForm();
     component.submitRequest();
     http.expectOne(api).flush('Not enough vacation balance', { status: 400, statusText: 'Bad Request' });
-    expect(component.submitError).toBe('Not enough vacation balance');
+    expect(component.submitError).toContain('not have enough vacation days');
+    expect(component.submitError).toContain('20');
     expect(component.submitting).toBeFalse();
     expect(component.requestForm.controls.startDate.value).toBe('2026-03-01');
-    expect(component.requests.length).toBe(0);
+    expect(component.requests().length).toBe(0);
   });
 
-  function pendingRequest(id: number) {
+  function pendingRequest(id: number): LeaveRequest {
     return { id, employeeId: 1, employee, type: 0,
       startDate: '2026-03-01', endDate: '2026-03-03', days: 3, status: 0 };
   }
@@ -104,7 +106,7 @@ describe('Leave requests', () => {
   it('disables the approval button for at least 800ms and updates only the approved row without reloading', fakeAsync(() => {
     const first = pendingRequest(10);
     const second = pendingRequest(11);
-    component.requests = [first, second];
+    component.requests.set([first, second]);
     fixture.detectChanges();
     const button: HTMLButtonElement = fixture.nativeElement.querySelector('tbody button');
     button.click();
@@ -118,14 +120,14 @@ describe('Leave requests', () => {
     tick(799);
     fixture.detectChanges();
     expect(button.disabled).toBeTrue();
-    expect(component.requests[0].status).toBe(0);
+    expect(component.requests()[0].status).toBe(0);
     tick(1);
     fixture.detectChanges();
 
     expect(component.approvingIds.size).toBe(0);
-    expect(component.requests[0].status).toBe(1);
-    expect(component.requests[0].employee).toEqual(employee);
-    expect(component.requests[1]).toBe(second);
+    expect(component.requests()[0].status).toBe(1);
+    expect(component.requests()[0].employee).toEqual(employee);
+    expect(component.requests()[1]).toBe(second);
     const rows = fixture.nativeElement.querySelectorAll('tbody tr');
     expect(rows[0].querySelector('button').textContent).toContain('Approved');
     expect(rows[0].querySelector('button').disabled).toBeTrue();
@@ -134,7 +136,7 @@ describe('Leave requests', () => {
   }));
 
   it('refreshes a stale status after a conflict and removes its approval button', fakeAsync(() => {
-    component.requests = [pendingRequest(10)];
+    component.requests.set([pendingRequest(10)]);
     component.approve(10);
     http.expectOne(`${api}/10/approve`).flush('Only pending leave requests can be approved',
       { status: 409, statusText: 'Conflict' });
@@ -142,7 +144,7 @@ describe('Leave requests', () => {
     http.expectOne(`${api}/10`).flush({ ...pendingRequest(10), status: 1 });
     tick(800);
     fixture.detectChanges();
-    expect(component.requests[0].status).toBe(1);
+    expect(component.requests()[0].status).toBe(1);
     expect(component.approvingIds.size).toBe(0);
     expect(fixture.nativeElement.querySelector('[role="alert"]').textContent)
       .toContain('already been approved or rejected');
@@ -153,7 +155,7 @@ describe('Leave requests', () => {
   }));
 
   it('displays persisted rejection for insufficient balance and prevents another approval', fakeAsync(() => {
-    component.requests = [pendingRequest(10)];
+    component.requests.set([pendingRequest(10)]);
     component.approve(10);
     http.expectOne(`${api}/10/approve`).flush({ message: 'Not enough vacation balance', request: { ...pendingRequest(10), status: 2 } },
       { status: 409, statusText: 'Conflict' });
@@ -170,11 +172,11 @@ describe('Leave requests', () => {
     const button: HTMLButtonElement = fixture.nativeElement.querySelector('tbody button');
     expect(button.textContent).toContain('Rejected');
     expect(button.disabled).toBeTrue();
-    expect(component.requests[0].status).toBe(2);
+    expect(component.requests()[0].status).toBe(2);
   }));
 
   it('keeps loading and feedback independent for simultaneous approvals', fakeAsync(() => {
-    component.requests = [pendingRequest(10), pendingRequest(11)];
+    component.requests.set([pendingRequest(10), pendingRequest(11)]);
     component.approve(10);
     tick(400);
     component.approve(11);
@@ -189,14 +191,14 @@ describe('Leave requests', () => {
     tick(400);
     expect(component.approvalSuccesses[10]).toBeTruthy();
     expect(component.approvalErrors[11]).toBe('This request no longer exists.');
-    expect(component.requests[0].status).toBe(1);
-    expect(component.requests.length).toBe(1);
+    expect(component.requests()[0].status).toBe(1);
+    expect(component.requests().length).toBe(1);
     expect(component.approvalNotice).toContain('removed');
     expect(component.approvingIds.size).toBe(0);
   }));
 
   it('ignores approvals for missing or already processed rows', () => {
-    component.requests = [{ ...pendingRequest(10), status: 1 }];
+    component.requests.set([{ ...pendingRequest(10), status: 1 }]);
     component.approve(10);
     component.approve(999);
     http.expectNone(request => request.method === 'POST');
@@ -204,9 +206,9 @@ describe('Leave requests', () => {
   });
 
   it('blocks overlapping dates including shared endpoints and enclosing ranges before POST', () => {
-    component.requests = [pendingRequest(10)];
-    for (const status of [0, 1]) {
-      component.requests[0].status = status;
+    component.requests.set([pendingRequest(10)]);
+    for (const status of [LeaveStatus.Pending, LeaveStatus.Approved]) {
+      component.requests()[0].status = status;
       for (const dates of [
         ['2026-03-01', '2026-03-03'], ['2026-03-03', '2026-03-05'],
         ['2026-02-28', '2026-03-01'], ['2026-02-28', '2026-03-05']
@@ -214,22 +216,23 @@ describe('Leave requests', () => {
         fillForm();
         component.requestForm.patchValue({ startDate: dates[0], endDate: dates[1], type: 1 });
         component.submitRequest();
-        expect(component.submitError).toContain('overlap');
+        expect(component.submitError).toBe(component.overlapMessage);
+        expect(component.overlapMessage).toContain(status === 1 ? 'approved leave' : 'awaiting approval');
         expect(component.submitting).toBeFalse();
         http.expectNone(request => request.method === 'POST');
       }
     }
     fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('These dates overlap');
+    expect(fixture.nativeElement.textContent).toContain('You can request');
   });
 
   it('allows adjacent ranges, rejected requests and requests for another employee', () => {
     fillForm();
-    component.requests = [{ ...pendingRequest(10), startDate: '2026-02-27', endDate: '2026-02-28' }];
+    component.requests.set([{ ...pendingRequest(10), startDate: '2026-02-27', endDate: '2026-02-28' }]);
     expect(component.overlappingRequest).toBeUndefined();
-    component.requests = [{ ...pendingRequest(10), status: 2 }];
+    component.requests.set([{ ...pendingRequest(10), status: 2 }]);
     expect(component.overlappingRequest).toBeUndefined();
-    component.requests = [{ ...pendingRequest(10), employeeId: 2 }];
+    component.requests.set([{ ...pendingRequest(10), employeeId: 2 }]);
     expect(component.overlappingRequest).toBeUndefined();
     component.submitRequest();
     http.expectOne(api).flush({ ...pendingRequest(11), employee: undefined });
@@ -237,7 +240,7 @@ describe('Leave requests', () => {
   });
 
   it('keeps approval disabled if refreshing a stale status fails', fakeAsync(() => {
-    component.requests = [pendingRequest(10)];
+    component.requests.set([pendingRequest(10)]);
     component.approve(10);
     http.expectOne(`${api}/10/approve`).flush('Only pending leave requests can be approved',
       { status: 409, statusText: 'Conflict' });
@@ -251,16 +254,16 @@ describe('Leave requests', () => {
   }));
 
   it('preserves the response even if the completion notification has a shorter delay', fakeAsync(() => {
-    component.requests = [pendingRequest(10)];
+    component.requests.set([pendingRequest(10)]);
     const started = Date.now();
     spyOn(Date, 'now').and.returnValues(started, started, started + 800);
     component.approve(10);
     http.expectOne(`${api}/10/approve`).flush({ ...pendingRequest(10), status: 1 });
     tick(799);
-    expect(component.requests[0].status).toBe(0);
+    expect(component.requests()[0].status).toBe(0);
     expect(component.approvingIds.has(10)).toBeTrue();
     tick(1);
-    expect(component.requests[0].status).toBe(1);
+    expect(component.requests()[0].status).toBe(1);
     expect(component.approvingIds.has(10)).toBeFalse();
   }));
 
@@ -286,16 +289,91 @@ describe('Leave requests', () => {
   });
 
   it('keeps a request pending after a server error and allows a retry', fakeAsync(() => {
-    component.requests = [pendingRequest(10)];
+    component.requests.set([pendingRequest(10)]);
     component.approve(10);
     http.expectOne(`${api}/10/approve`).flush('', { status: 500, statusText: 'Server Error' });
     tick(800);
-    expect(component.requests[0].status).toBe(0);
+    expect(component.requests()[0].status).toBe(0);
     expect(component.approvalErrors[10]).toContain('Please try again');
     component.approve(10);
     expect(component.approvalErrors[10]).toBeUndefined();
     http.expectOne(`${api}/10/approve`).flush({ ...pendingRequest(10), status: 1 });
     tick(800);
-    expect(component.requests[0].status).toBe(1);
+    expect(component.requests()[0].status).toBe(1);
+  }));
+
+  it('offers only the 16th when the 17th and 18th are already approved and submits the selected day', () => {
+    component.requests.set([{ ...pendingRequest(10), startDate: '2026-10-17', endDate: '2026-10-18', status: 1, days: 2 }]);
+    component.requestForm.setValue({ employeeId: 1, type: 0, startDate: '2026-10-16', endDate: '2026-10-18' });
+    expect(component.availableRanges).toEqual([{ startDate: '2026-10-16', endDate: '2026-10-16', days: 1 }]);
+    expect(component.overlapMessage).toContain('only 1 day of leave');
+    expect(component.overlapMessage).toContain('16/10/2026');
+    expect(component.overlapMessage).toContain('17/10/2026');
+    component.selectAvailableRange(component.availableRanges[0]);
+    expect(component.overlappingRequest).toBeUndefined();
+    expect(component.requestedDays).toBe(1);
+    component.submitRequest();
+    const request = http.expectOne(api);
+    expect(request.request.body.startDate).toBe('2026-10-16');
+    expect(request.request.body.endDate).toBe('2026-10-16');
+    request.flush({ ...pendingRequest(11), startDate: '2026-10-16', endDate: '2026-10-16', days: 1 });
+    expect(component.submitSuccess).toContain('16/10/2026');
+  });
+
+  it('merges covered intervals and offers separate gaps without counting covered days twice', () => {
+    component.requests.set([
+      { ...pendingRequest(10), startDate: '2026-10-17', endDate: '2026-10-18', status: 1 },
+      { ...pendingRequest(11), startDate: '2026-10-18', endDate: '2026-10-19', status: 0 },
+      { ...pendingRequest(12), startDate: '2026-10-21', endDate: '2026-10-21', status: 1 }
+    ]);
+    component.requestForm.setValue({ employeeId: 1, type: 0, startDate: '2026-10-16', endDate: '2026-10-22' });
+    expect(component.availableRanges.map(range => range.startDate)).toEqual(['2026-10-16', '2026-10-20', '2026-10-22']);
+    expect(component.overlapMessage).toContain('3 days of leave');
+    expect(component.overlapMessage).toContain('awaiting approval');
+  });
+
+  it('explains full coverage and offers no available dates', () => {
+    component.requests.set([{ ...pendingRequest(10), status: 1 }]);
+    fillForm();
+    expect(component.availableRanges).toEqual([]);
+    expect(component.overlapMessage).toContain('No dates are available');
+    component.submitRequest();
+    http.expectNone(api);
+  });
+
+  it('cancels an in-flight submission and form listeners when the component is destroyed', () => {
+    fillForm();
+    component.submitRequest();
+    const request = http.expectOne(api);
+    fixture.destroy();
+    expect(request.cancelled).toBeTrue();
+    expect(component.submitting).toBeFalse();
+    component.submitError = 'Existing message';
+    component.requestForm.controls.endDate.setValue('2026-03-02');
+    expect(component.submitError).toBe('Existing message');
+  });
+
+  it('cancels the nested status refresh when the component is destroyed', () => {
+    component.requests.set([pendingRequest(10)]);
+    component.approve(10);
+    http.expectOne(`${api}/10/approve`).flush('Only pending leave requests can be approved',
+      { status: 409, statusText: 'Conflict' });
+    const refresh = http.expectOne(`${api}/10`);
+    fixture.destroy();
+    expect(refresh.cancelled).toBeTrue();
+    expect(component.approvingIds.size).toBe(0);
+    expect(component.approvalErrors[10]).toBeUndefined();
+  });
+
+  it('cancels delayed approval feedback on destruction instead of updating a closed view', fakeAsync(() => {
+    component.requests.set([pendingRequest(10)]);
+    component.approve(10);
+    http.expectOne(`${api}/10/approve`).flush({ ...pendingRequest(10), status: 1 });
+    tick(400);
+    fixture.destroy();
+    tick(1000);
+    expect(component.approvingIds.size).toBe(0);
+    expect(component.requests()[0].status).toBe(LeaveStatus.Pending);
+    expect(component.approvalSuccesses[10]).toBeUndefined();
   }));
 });

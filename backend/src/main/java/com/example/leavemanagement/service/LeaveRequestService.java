@@ -38,6 +38,9 @@ public class LeaveRequestService {
 
     @Transactional(readOnly = true)
     public List<LeaveRequest> search(String name) {
+        if (name == null || name.isBlank() || name.length() > 100) {
+            throw new LeaveRequestException(INVALID_REQUEST, "Search name must contain between 1 and 100 characters");
+        }
         return requests.findByEmployeeName(name);
     }
 

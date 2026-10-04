@@ -3,6 +3,7 @@ package com.example.leavemanagement.controller;
 import com.example.leavemanagement.service.LeaveRequestException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -11,6 +12,12 @@ import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<String> handleMalformedBody(HttpMessageNotReadableException exception) {
+        // Do not expose parser details, Java class names or submitted values.
+        return ResponseEntity.badRequest().body("Invalid request body. Check the field values and date format.");
+    }
+
     @ExceptionHandler(LeaveRequestException.class)
     public ResponseEntity<String> handleBusinessError(LeaveRequestException exception) {
         HttpStatus status = switch (exception.getKind()) {

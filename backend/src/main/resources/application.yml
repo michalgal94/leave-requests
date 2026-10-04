@@ -1,7 +1,17 @@
 server:
   port: 5080
+  # Local development is unauthenticated; avoid exposing it to the LAN by default.
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
 
 spring:
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+      accept-float-as-int: false
   datasource:
     # Overridden by env vars in docker-compose. Defaults let you run the app
     # against a locally-running Postgres (e.g. `docker compose up db`).

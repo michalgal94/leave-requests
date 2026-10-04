@@ -1,18 +1,19 @@
-import { Component, DestroyRef, OnInit, inject } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { AbstractControl, FormControl, FormGroup, ReactiveFormsModule, ValidationErrors, Validators } from '@angular/forms';
 import { catchError, concatMap, dematerialize, finalize, map, materialize, mergeMap, of, tap, throwError, timer } from 'rxjs';
-import { Employee, LeaveRequest } from '../models/leave-request.model';
+import { CreateLeaveRequest, Employee, LeaveRequest, LeaveStatus, LeaveType } from '../models/leave-request.model';
+import { ApiError, LeaveRequestsApiService } from '../services/leave-requests-api.service';
+import { AvailableRange, availableLeaveRanges } from './leave-availability';
 
 function dateRangeValidator(control: AbstractControl): ValidationErrors | null {
-  const { startDate, endDate } = control.value;
-  return startDate && endDate && startDate > endDate ? { dateOrder: true } : null;
+  const startDate: unknown = control.get('startDate')?.value;
+  const endDate: unknown = control.get('endDate')?.value;
+  return typeof startDate === 'string' && typeof endDate === 'string'
+    && startDate && endDate && startDate > endDate ? { dateOrder: true } : null;
 }
 
-// NOTE: This component was written quickly for a POC.
-// It talks to the API directly, manages state by hand and uses `any` everywhere.
 @Component({
   selector: 'app-leave-requests',
   standalone: true,
@@ -21,12 +22,12 @@ function dateRangeValidator(control: AbstractControl): ValidationErrors | null {
   styleUrls: ['./leave-requests.component.css']
 })
 export class LeaveRequestsComponent implements OnInit {
-  requests: any[] = [];
+  readonly requests = signal<LeaveRequest[]>([]);
   loading = false;
   loadError = '';
   approvalNotice = '';
   readonly unsyncedApprovalIds = new Set<number>();
-  employees: Employee[] = [];
+  readonly employees = signal<Employee[]>([]);
   employeesLoading = false;
   employeesError = '';
   submitting = false;
@@ -37,7 +38,7 @@ export class LeaveRequestsComponent implements OnInit {
   readonly approvalSuccesses: Record<number, string> = {};
   readonly requestForm = new FormGroup({
     employeeId: new FormControl<number | null>(null, Validators.required),
-    type: new FormControl<number | null>(null, Validators.required),
+    type: new FormControl<LeaveType | null>(null, Validators.required),
     startDate: new FormControl('', { nonNullable: true, validators: Validators.required }),
     endDate: new FormControl('', { nonNullable: true, validators: Validators.required })
   }, { validators: dateRangeValidator });
@@ -52,15 +53,49 @@ export class LeaveRequestsComponent implements OnInit {
   get overlappingRequest(): LeaveRequest | undefined {
     const { employeeId, startDate, endDate } = this.requestForm.getRawValue();
     if (!employeeId || !startDate || !endDate || startDate > endDate) return undefined;
-    return this.requests.find(request => request.employeeId === employeeId
+    return this.requests().find(request => request.employeeId === employeeId
       && (request.status === 0 || request.status === 1)
       && request.startDate <= endDate && request.endDate >= startDate);
   }
 
-  private apiUrl = 'http://localhost:5080/api/leave-requests';
+  get availableRanges(): AvailableRange[] {
+    const { employeeId, startDate, endDate } = this.requestForm.getRawValue();
+    return availableLeaveRanges(startDate, endDate,
+      this.requests().filter(request => request.employeeId === employeeId));
+  }
+
+  formatRange(range: { startDate: string; endDate: string }): string {
+    const format = (date: string): string => date.split('-').reverse().join('/');
+    return range.startDate === range.endDate ? format(range.startDate)
+      : `${format(range.startDate)} – ${format(range.endDate)}`;
+  }
+
+  get overlapMessage(): string {
+    if (!this.overlappingRequest) return '';
+    const { employeeId, startDate, endDate } = this.requestForm.getRawValue();
+    const covered = this.requests().filter(request => request.employeeId === employeeId
+      && (request.status === 0 || request.status === 1)
+      && request.startDate <= endDate && request.endDate >= startDate);
+    const describe = (status: number): string => covered.filter(request => request.status === status)
+      .map(request => this.formatRange({ startDate: request.startDate < startDate ? startDate : request.startDate,
+        endDate: request.endDate > endDate ? endDate : request.endDate })).join(', ');
+    const approved = describe(1);
+    const pending = describe(0);
+    const details = [approved ? `You already have approved leave on ${approved}.` : '',
+      pending ? `You already have requests awaiting approval for ${pending}.` : ''].filter(Boolean).join(' ');
+    const ranges = this.availableRanges;
+    const days = ranges.reduce((sum, range) => sum + range.days, 0);
+    return days === 0 ? `${details} No dates are available in the selected range. Please choose different dates.`
+      : `${details} You can request ${days === 1 ? 'only 1 day of leave' : `${days} days of leave`} within this range: ${ranges.map(range => this.formatRange(range)).join(', ')}. Select an available range and submit it for approval.`;
+  }
+
+  selectAvailableRange(range: AvailableRange): void {
+    this.requestForm.patchValue({ startDate: range.startDate, endDate: range.endDate });
+  }
+
   private readonly destroyRef = inject(DestroyRef);
 
-  constructor(private http: HttpClient) {}
+  constructor(private readonly api: LeaveRequestsApiService) {}
 
   ngOnInit(): void {
     this.requestForm.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
@@ -72,12 +107,13 @@ export class LeaveRequestsComponent implements OnInit {
   }
 
   loadEmployees(): void {
+    if (this.employeesLoading) return;
     this.employeesLoading = true;
     this.employeesError = '';
-    this.http.get<Employee[]>('http://localhost:5080/api/employees')
-      .pipe(finalize(() => this.employeesLoading = false))
+    this.api.getEmployees()
+      .pipe(finalize(() => this.employeesLoading = false), takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: employees => this.employees = employees,
+        next: employees => this.employees.set(employees),
         error: () => this.employeesError = 'Could not load employees. Please try again.'
       });
   }
@@ -89,67 +125,81 @@ export class LeaveRequestsComponent implements OnInit {
     this.requestForm.markAllAsTouched();
     if (this.requestForm.invalid || this.requestedDays === null) return;
     if (this.loading || this.loadError) {
-      this.submitError = 'Please load the existing requests before submitting.';
+      this.submitError = 'Please wait for existing requests to load before submitting a new request.';
       return;
     }
     if (this.overlappingRequest) {
-      this.submitError = 'These dates overlap an existing pending or approved leave request for this employee.';
+      this.submitError = this.overlapMessage;
       return;
     }
 
-    const payload = this.requestForm.getRawValue();
+    const values = this.requestForm.getRawValue();
+    if (values.employeeId === null || values.type === null) return;
+    const payload: CreateLeaveRequest = { ...values, employeeId: values.employeeId, type: values.type };
     this.submitting = true;
-    this.http.post<LeaveRequest>(this.apiUrl, payload)
-      .pipe(finalize(() => this.submitting = false))
+    this.api.createRequest(payload)
+      .pipe(finalize(() => this.submitting = false), takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: request => {
-          request.employee = this.employees.find(employee => employee.id === request.employeeId);
-          this.requests = [request, ...this.requests]
-            .sort((a, b) => b.startDate.localeCompare(a.startDate));
+          const created = { ...request, employee: request.employee ?? this.employees().find(employee => employee.id === request.employeeId) };
+          this.requests.update(requests => [created, ...requests]
+            .sort((a, b) => b.startDate.localeCompare(a.startDate)));
           this.requestForm.reset();
-          this.submitSuccess = 'Leave request submitted successfully.';
+          this.submitSuccess = `Your request for ${request.days === 1 ? '1 day' : `${request.days} days`} of leave on ${this.formatRange(request)} has been submitted and is awaiting approval.`;
         },
-        error: (error: HttpErrorResponse) => {
-          this.submitError = typeof error.error === 'string' && error.error.trim()
-            ? error.error
-            : 'Could not submit the request. Please try again.';
+        error: (error: ApiError) => {
+          const message = error.message;
+          if (message === 'Not enough vacation balance') {
+            const employee = this.employees().find(employee => employee.id === payload.employeeId);
+            const used = this.requests().filter(request => request.employeeId === payload.employeeId
+              && request.type === 0 && request.status === 1).reduce((sum, request) => sum + request.days, 0);
+            this.submitError = `You do not have enough vacation days for this request.${employee ? ` Based on the displayed requests, you have ${Math.max(0, employee.annualQuota - used)} days remaining.` : ''} Please choose a shorter range.`;
+          } else if (message?.includes('overlap')) {
+            this.submitError = 'Some selected dates have since been included in another request. Your requests are being refreshed; select an available range once the update completes.';
+            this.load();
+          } else {
+            this.submitError = error.status === 0
+              ? 'Could not connect to the server. Your details are still in the form; try submitting again when the connection is restored.'
+              : 'Could not submit your request. Your details are still in the form; check the fields and try again.';
+          }
         }
       });
   }
 
   load(): void {
+    if (this.loading) return;
     this.loading = true;
     this.loadError = '';
-    this.http.get<LeaveRequest[]>(this.apiUrl)
-      .pipe(finalize(() => this.loading = false))
+    this.api.getRequests()
+      .pipe(finalize(() => this.loading = false), takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: data => this.requests = data,
+        next: data => this.requests.set(data),
         error: () => this.loadError = 'Could not load leave requests. Please try again.'
       });
   }
 
   approve(id: number): void {
-    const current = this.requests.find(request => request.id === id);
+    const current = this.requests().find(request => request.id === id);
     if (!current || current.status !== 0 || this.approvingIds.has(id) || this.unsyncedApprovalIds.has(id)) return;
 
     delete this.approvalErrors[id];
     delete this.approvalSuccesses[id];
     this.approvingIds.add(id);
     const startedAt = Date.now();
-    this.http.post<LeaveRequest>(`${this.apiUrl}/${id}/approve`, {})
+    this.api.approveRequest(id)
       .pipe(
-        catchError((error: HttpErrorResponse) => {
+        catchError((error: ApiError) => {
           if (error.status !== 404 && error.status !== 409) {
             return throwError(() => error);
           }
           // Refresh only this row before releasing its button after a stale-status error.
-          return this.http.get<LeaveRequest>(`${this.apiUrl}/${id}`).pipe(
+          return this.api.getRequest(id).pipe(
             tap(updated => {
-              this.requests = this.requests.map(request => request.id === id ? updated : request);
+              this.requests.update(requests => requests.map(request => request.id === id ? updated : request));
             }),
-            catchError((refreshError: HttpErrorResponse) => {
+            catchError((refreshError: ApiError) => {
               if (refreshError.status === 404) {
-                this.requests = this.requests.filter(request => request.id !== id);
+                this.requests.update(requests => requests.filter(request => request.id !== id));
                 this.approvalNotice = 'The request no longer exists and was removed from the list.';
               } else {
                 this.unsyncedApprovalIds.add(id);
@@ -164,23 +214,24 @@ export class LeaveRequestsComponent implements OnInit {
         concatMap(notification => timer(Math.max(0, 800 - (Date.now() - startedAt)))
           .pipe(map(() => notification))),
         dematerialize(),
-        finalize(() => this.approvingIds.delete(id))
+        finalize(() => this.approvingIds.delete(id)),
+        takeUntilDestroyed(this.destroyRef)
       )
       .subscribe({
         next: approved => {
-          this.requests = this.requests.map(request => request.id === id
+          this.requests.update(requests => requests.map(request => request.id === id
             ? { ...approved, employee: approved.employee ?? request.employee }
-            : request);
+            : request));
           this.approvalSuccesses[id] = 'Request approved successfully.';
         },
-        error: (error: HttpErrorResponse) => {
-          const message = typeof error.error === 'string' ? error.error : error.error?.message;
+        error: (error: ApiError) => {
+          const message = error.message;
           if (error.status === 404) {
             this.approvalErrors[id] = 'This request no longer exists.';
           } else if (message === 'Only pending leave requests can be approved') {
             this.approvalErrors[id] = 'This request has already been approved or rejected.';
           } else if (message === 'Not enough vacation balance') {
-            const rejected = this.requests.find(request => request.id === id)?.status === 2;
+            const rejected = this.requests().find(request => request.id === id)?.status === LeaveStatus.Rejected;
             this.approvalErrors[id] = rejected
               ? 'Request rejected: not enough vacation balance.'
               : 'Not enough vacation balance to approve this request.';
@@ -196,13 +247,13 @@ export class LeaveRequestsComponent implements OnInit {
       });
   }
 
-  typeLabel(type: number): string {
+  typeLabel(type: LeaveType): string {
     if (type == 0) return 'Vacation';
     if (type == 1) return 'Sick';
     return 'Unpaid';
   }
 
-  statusLabel(status: number): string {
+  statusLabel(status: LeaveStatus): string {
     if (status == 0) return 'Pending';
     if (status == 1) return 'Approved';
     return 'Rejected';
