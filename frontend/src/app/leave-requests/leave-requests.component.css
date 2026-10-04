@@ -9,3 +9,49 @@ button {
 button:hover {
   background: #186faf;
 }
+
+.request-form {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.form-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+input, select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #888;
+  border-radius: 4px;
+}
+
+.error {
+  color: #b42318;
+}
+
+.success {
+  color: #176b35;
+}
+
+button:disabled, fieldset:disabled button {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

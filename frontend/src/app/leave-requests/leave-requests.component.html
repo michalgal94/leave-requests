@@ -1,8 +1,66 @@
 <h2>Leave Requests</h2>
 
-<!-- TODO (candidate): add the "new request" form here, with validation. -->
+<form [formGroup]="requestForm" (ngSubmit)="submitRequest()" class="request-form">
+  <h3>New leave request</h3>
+  <p *ngIf="employeesLoading" role="status">Loading employees...</p>
+  <p *ngIf="employeesError" class="error" role="alert">
+    {{ employeesError }}
+    <button type="button" (click)="loadEmployees()">Retry</button>
+  </p>
+  <p *ngIf="!employeesLoading && !employeesError && employees.length === 0" role="status">
+    No employees are available to submit a request.
+  </p>
+
+  <fieldset [disabled]="submitting || employeesLoading || !!employeesError || employees.length === 0">
+    <div class="form-fields">
+      <div>
+        <label for="employee">Employee</label>
+        <select id="employee" formControlName="employeeId" aria-describedby="employee-error">
+          <option [ngValue]="null">Select an employee</option>
+          <option *ngFor="let employee of employees" [ngValue]="employee.id">{{ employee.name }}</option>
+        </select>
+        <p id="employee-error" class="error" *ngIf="requestForm.controls.employeeId.touched && requestForm.controls.employeeId.hasError('required')">Please select an employee.</p>
+      </div>
+      <div>
+        <label for="leave-type">Leave type</label>
+        <select id="leave-type" formControlName="type" aria-describedby="type-error">
+          <option [ngValue]="null">Select a leave type</option>
+          <option [ngValue]="0">Vacation</option>
+          <option [ngValue]="1">Sick</option>
+          <option [ngValue]="2">Unpaid</option>
+        </select>
+        <p id="type-error" class="error" *ngIf="requestForm.controls.type.touched && requestForm.controls.type.hasError('required')">Please select a leave type.</p>
+      </div>
+      <div>
+        <label for="start-date">Start date</label>
+        <input id="start-date" type="date" formControlName="startDate" aria-describedby="start-error date-order-error">
+        <p id="start-error" class="error" *ngIf="requestForm.controls.startDate.touched && requestForm.controls.startDate.hasError('required')">Please enter a start date.</p>
+      </div>
+      <div>
+        <label for="end-date">End date</label>
+        <input id="end-date" type="date" formControlName="endDate" aria-describedby="end-error date-order-error">
+        <p id="end-error" class="error" *ngIf="requestForm.controls.endDate.touched && requestForm.controls.endDate.hasError('required')">Please enter an end date.</p>
+      </div>
+      <div>
+        <label for="requested-days">Total Days</label>
+        <input id="requested-days" type="number" [value]="requestedDays ?? ''" readonly>
+      </div>
+    </div>
+    <p id="date-order-error" class="error" role="alert" *ngIf="requestForm.hasError('dateOrder') && (requestForm.controls.startDate.touched || requestForm.controls.endDate.touched)">
+      Start date must not be after end date. The number of days must be positive.
+    </p>
+    <button type="submit">{{ submitting ? 'Submitting...' : 'Submit request' }}</button>
+    <p *ngIf="overlappingRequest" class="error" role="alert">
+      These dates overlap an existing pending or approved leave request for this employee.
+    </p>
+  </fieldset>
+  <p *ngIf="submitError" class="error" role="alert">{{ submitError }}</p>
+  <p *ngIf="submitSuccess" class="success" role="status">{{ submitSuccess }}</p>
+</form>
 
 <div *ngIf="loading">Loading...</div>
+<p *ngIf="loadError" class="error" role="alert">{{ loadError }} <button type="button" (click)="load()">Retry</button></p>
+<p *ngIf="approvalNotice" role="status">{{ approvalNotice }}</p>
 
 <table *ngIf="!loading">
   <thead>
@@ -27,7 +85,13 @@
       <td>{{ r.days }}</td>
       <td>{{ statusLabel(r.status) }}</td>
       <td>
-        <button *ngIf="r.status == 0" (click)="approve(r.id)">Approve</button>
+        <button type="button" *ngIf="r.status == 0 || approvingIds.has(r.id)" (click)="approve(r.id)"
+                [disabled]="approvingIds.has(r.id) || unsyncedApprovalIds.has(r.id)" [attr.aria-busy]="approvingIds.has(r.id)">
+          {{ approvingIds.has(r.id) ? 'Approving...' : 'Approve' }}
+        </button>
+        <button type="button" *ngIf="r.status != 0 && !approvingIds.has(r.id)" disabled>{{ statusLabel(r.status) }}</button>
+        <p *ngIf="approvalErrors[r.id]" class="error" role="alert">{{ approvalErrors[r.id] }}</p>
+        <p *ngIf="approvalSuccesses[r.id]" class="success" role="status">{{ approvalSuccesses[r.id] }}</p>
       </td>
     </tr>
   </tbody>
