@@ -52,7 +52,7 @@
     <button type="submit">{{ submitting ? 'Submitting...' : 'Submit request' }}</button>
     <div *ngIf="overlappingRequest" role="status">
       <p>{{ overlapMessage }}</p>
-      <button type="button" *ngFor="let range of availableRanges" (click)="selectAvailableRange(range)">
+      <button type="button" *ngFor="let range of availableRanges; trackBy: trackAvailableRange" (click)="selectAvailableRange(range)">
         Select {{ formatRange(range) }} ({{ range.days === 1 ? '1 day' : range.days + ' days' }})
       </button>
     </div>

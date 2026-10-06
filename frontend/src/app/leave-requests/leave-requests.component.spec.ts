@@ -320,6 +320,22 @@ describe('Leave requests', () => {
     expect(component.submitSuccess).toContain('16/10/2026');
   });
 
+  it('keeps available-range buttons attached across change detection so a mouse click selects the range', () => {
+    component.requests.set([{ ...pendingRequest(10), startDate: '2026-10-17', endDate: '2026-10-18', status: 1 }]);
+    component.requestForm.setValue({ employeeId: 1, type: 0, startDate: '2026-10-16', endDate: '2026-10-18' });
+    fixture.detectChanges();
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('fieldset div[role="status"] button');
+    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    fixture.detectChanges();
+    expect(button.isConnected).toBeTrue();
+    expect(fixture.nativeElement.querySelector('fieldset div[role="status"] button')).toBe(button);
+    button.click();
+    fixture.detectChanges();
+    expect(component.requestForm.controls.startDate.value).toBe('2026-10-16');
+    expect(component.requestForm.controls.endDate.value).toBe('2026-10-16');
+    expect(component.overlappingRequest).toBeUndefined();
+  });
+
   it('merges covered intervals and offers separate gaps without counting covered days twice', () => {
     component.requests.set([
       { ...pendingRequest(10), startDate: '2026-10-17', endDate: '2026-10-18', status: 1 },

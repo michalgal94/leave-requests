@@ -93,6 +93,10 @@ export class LeaveRequestsComponent implements OnInit {
     this.requestForm.patchValue({ startDate: range.startDate, endDate: range.endDate });
   }
 
+  trackAvailableRange(_index: number, range: AvailableRange): string {
+    return `${range.startDate}:${range.endDate}`;
+  }
+
   private readonly destroyRef = inject(DestroyRef);
 
   constructor(private readonly api: LeaveRequestsApiService) {}
